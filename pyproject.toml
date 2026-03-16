@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canos-repro"
+version = "0.1.0"
+description = "Reproduction-oriented implementation of CANOS (arXiv:2403.17660)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Research Reproduction" }
+]
+dependencies = [
+  "torch>=2.2.0",
+  "torch-geometric>=2.7.0",
+  "numpy>=1.26.0",
+  "PyYAML>=6.0.1",
+  "tqdm>=4.66.0"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

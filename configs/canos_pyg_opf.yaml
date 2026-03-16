@@ -1,0 +1,23 @@
+model:
+  hidden_size: 128
+  num_message_passing_steps: 12
+  decoder_hidden: 256
+
+dataset:
+  type: pyg_opf
+  root: data/pyg_opf
+  split: train
+  case_name: pglib_opf_case500_goc
+  num_groups: 1
+  topological_perturbations: false
+  force_reload: false
+  batch_size: 1
+  shuffle: true
+
+train:
+  lr: 0.0002
+  steps: 80
+  log_every: 10
+  constraint_weight: 0.1
+  grad_clip: 1.0
+  out_dir: artifacts
