@@ -1,0 +1,25 @@
+---
+description: OPF-GNN project context: AC-OPF, HeteroData, data/model/loss structure
+globs: ["**/*.py", "**/README.md"]
+---
+
+# OPF-GNN project master context
+
+## Goal
+- Replicate/extend CANOS-style architecture to predict AC-OPF solutions in real time (<100ms) with GNNs.
+- Target case: **pglib_opf_case14_ieee** (14-bus).
+
+## Data (OPFDataset)
+- `torch_geometric.datasets.OPFDataset(root, split, case_name='pglib_opf_case14_ieee', num_groups=1~20)`.
+- **HeteroData structure:**
+  - Nodes: `bus` (x: demand/voltage bounds, y: solution), `generator` (x: cost/capacity, y: Pg, Qg), `load`, `shunt` (x only).
+  - Edges: `('bus','ac_line','bus')`, `('bus','transformer','bus')` (with edge_attr), `generator_link`/`load_link`/`shunt_link` (both directions).
+
+## Model (model.py)
+- **HeteroGNN**: `HeteroConv` + `SAGEConv` per edge type, type-specific MLP heads.
+- Outputs: `bus` → (V_m, V_a), `generator` → (P_g, Q_g).
+- Build `x_dict` and `edge_index_dict` via `HeteroGNN.x_dict_from_data(data)` and `HeteroGNN.edge_index_dict_from_data(data)`.
+
+## Loss (losses.py)
+- Default: `mse_loss(pred_dict, target_dict)`.
+- Extension: `physics_informed_loss_placeholder` for power-flow violation penalty (\(S = V \cdot I^*\)), currently returns 0.
