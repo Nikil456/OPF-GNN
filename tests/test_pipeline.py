@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model import HeteroGNN, EDGE_TYPES
 from losses import mse_loss, combined_loss
+from network_sketch import save_network_sketch
 from torch_geometric.data import HeteroData
 
 
@@ -65,3 +66,23 @@ def test_combined_loss():
     total, breakdown = combined_loss(pred, target, physics_weight=0.0)
     assert total.dim() == 0
     assert "mse" in breakdown and "physics" in breakdown
+
+
+def test_network_sketch_png(tmp_path):
+    data = _make_fake_hetero_data()
+    before_p = tmp_path / "before.png"
+    after_p = tmp_path / "after.png"
+    save_network_sketch(data, str(before_p), phase="before")
+    assert before_p.is_file() and before_p.stat().st_size > 0
+    x_dict = HeteroGNN.x_dict_from_data(data)
+    edge_index_dict = HeteroGNN.edge_index_dict_from_data(data)
+    for key in EDGE_TYPES:
+        if key not in edge_index_dict:
+            edge_index_dict[key] = torch.empty(2, 0, dtype=torch.long)
+    model = HeteroGNN(hidden_channels=8, num_layers=2, out_bus=2, out_generator=2)
+    model.eval()
+    with torch.no_grad():
+        pred = model(x_dict, edge_index_dict)
+    target = {"bus": data["bus"].y, "generator": data["generator"].y}
+    save_network_sketch(data, str(after_p), phase="after", pred_dict=pred, target_dict=target)
+    assert after_p.is_file() and after_p.stat().st_size > 0
