@@ -1,17 +1,12 @@
-from .data import (
-    GraphBatch,
-    SyntheticPowerDataset,
-    graphbatch_from_pyg,
-    patch_torch_geometric_tar_extract_compat,
-)
-from .model import CANOS
+from .data import GraphBatch
 from .losses import compute_total_loss
+from .model import CANOS
+from .sharaf_csv import SharafCSVDataset, graphbatch_from_sharaf_dir
 
 __all__ = [
     "GraphBatch",
-    "SyntheticPowerDataset",
-    "graphbatch_from_pyg",
-    "patch_torch_geometric_tar_extract_compat",
     "CANOS",
     "compute_total_loss",
+    "SharafCSVDataset",
+    "graphbatch_from_sharaf_dir",
 ]

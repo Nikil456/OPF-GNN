@@ -12,6 +12,13 @@ def _ineq_violation(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torc
     return torch.relu(lo - x) + torch.relu(x - hi)
 
 
+def _mean_finite(x: torch.Tensor) -> torch.Tensor:
+    """``torch.mean`` on length-0 tensors returns NaN; use 0 instead."""
+    if x.numel() == 0:
+        return x.new_tensor(0.0)
+    return torch.mean(x)
+
+
 def _power_balance_mismatch(g: GraphBatch, pred: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
     nb = g.bus_x.shape[0]
 
@@ -55,6 +62,38 @@ def supervised_l2_loss(pred: Dict[str, torch.Tensor], targets: Dict[str, torch.T
     return loss
 
 
+def supervised_l2_loss_standardized(
+    pred: Dict[str, torch.Tensor],
+    targets: Dict[str, torch.Tensor],
+    target_stats: Dict[str, Dict[str, torch.Tensor]],
+) -> torch.Tensor:
+    """
+    L2 supervised loss in standardized (z-scored) target space:
+      mse( (pred-mean)/std , (target-mean)/std )
+    """
+    loss = pred["bus_va"].new_tensor(0.0)
+    for key in ["bus_va", "bus_vm", "gen_pg", "gen_qg"]:
+        if key in targets and key in target_stats:
+            mean = target_stats[key]["mean"].to(pred[key].device)
+            std = target_stats[key]["std"].to(pred[key].device)
+            pred_n = (pred[key] - mean) / std
+            targ_n = (targets[key] - mean) / std
+            loss = loss + torch.mean((pred_n - targ_n) ** 2)
+        elif key in targets:
+            loss = loss + torch.mean((pred[key] - targets[key]) ** 2)
+
+    for key in ["line_pf", "line_qf", "line_pt", "line_qt", "trafo_pf", "trafo_qf", "trafo_pt", "trafo_qt"]:
+        if key in targets and key in target_stats:
+            mean = target_stats[key]["mean"].to(pred[key].device)
+            std = target_stats[key]["std"].to(pred[key].device)
+            pred_n = (pred[key] - mean) / std
+            targ_n = (targets[key] - mean) / std
+            loss = loss + torch.mean((pred_n - targ_n) ** 2)
+        elif key in targets:
+            loss = loss + torch.mean((pred[key] - targets[key]) ** 2)
+    return loss
+
+
 def constraint_loss(g: GraphBatch, pred: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     mismatch_p, mismatch_q = _power_balance_mismatch(g, pred)
 
@@ -66,16 +105,17 @@ def constraint_loss(g: GraphBatch, pred: Dict[str, torch.Tensor]) -> Dict[str, t
     line_dtheta = pred["bus_va"][g.line_from] - pred["bus_va"][g.line_to]
     trafo_dtheta = pred["bus_va"][g.trafo_from] - pred["bus_va"][g.trafo_to]
 
+    ref_va = pred["bus_va"][g.bus_is_ref > 0.5]
     terms = {
-        "ref_angle": torch.mean(torch.abs(pred["bus_va"][g.bus_is_ref > 0.5])),
+        "ref_angle": _mean_finite(torch.abs(ref_va)),
         "power_balance_p": torch.mean(torch.abs(mismatch_p)),
         "power_balance_q": torch.mean(torch.abs(mismatch_q)),
-        "line_thermal_f": torch.mean(torch.relu(line_s_f - g.line_rate_a)),
-        "line_thermal_t": torch.mean(torch.relu(line_s_t - g.line_rate_a)),
-        "trafo_thermal_f": torch.mean(torch.relu(trafo_s_f - g.trafo_rate_a)),
-        "trafo_thermal_t": torch.mean(torch.relu(trafo_s_t - g.trafo_rate_a)),
-        "line_angle": torch.mean(_ineq_violation(line_dtheta, g.line_angmin, g.line_angmax)),
-        "trafo_angle": torch.mean(_ineq_violation(trafo_dtheta, g.trafo_angmin, g.trafo_angmax)),
+        "line_thermal_f": _mean_finite(torch.relu(line_s_f - g.line_rate_a)),
+        "line_thermal_t": _mean_finite(torch.relu(line_s_t - g.line_rate_a)),
+        "trafo_thermal_f": _mean_finite(torch.relu(trafo_s_f - g.trafo_rate_a)),
+        "trafo_thermal_t": _mean_finite(torch.relu(trafo_s_t - g.trafo_rate_a)),
+        "line_angle": _mean_finite(_ineq_violation(line_dtheta, g.line_angmin, g.line_angmax)),
+        "trafo_angle": _mean_finite(_ineq_violation(trafo_dtheta, g.trafo_angmin, g.trafo_angmax)),
         "bus_vm_bounds": torch.mean(_ineq_violation(pred["bus_vm"], g.bus_vm_min, g.bus_vm_max)),
         "gen_pg_bounds": torch.mean(_ineq_violation(pred["gen_pg"], g.gen_pg_min, g.gen_pg_max)),
         "gen_qg_bounds": torch.mean(_ineq_violation(pred["gen_qg"], g.gen_qg_min, g.gen_qg_max)),
@@ -88,8 +128,12 @@ def compute_total_loss(
     g: GraphBatch,
     pred: Dict[str, torch.Tensor],
     constraint_weight: float = 0.1,
+    target_stats: Dict[str, Dict[str, torch.Tensor]] | None = None,
 ) -> Dict[str, torch.Tensor]:
-    supervised = supervised_l2_loss(pred, g.targets or {})
+    if target_stats is not None:
+        supervised = supervised_l2_loss_standardized(pred, g.targets or {}, target_stats)
+    else:
+        supervised = supervised_l2_loss(pred, g.targets or {})
     constraints = constraint_loss(g, pred)
     total = supervised + constraint_weight * constraints["total"]
     return {

@@ -1,0 +1,2 @@
+case_id,export_timestamp_utc,constraints,status,sample_index,total_load_sampled_mw,use_slack,objective,total_generation_mw,total_load_mw,num_buses,num_branches,num_generators,lines_on,lines_off
+pglib_opf_case57_ieee,sample_000009,,optimal,9,930.082040138629,False,25009.960611895443,930.0820401386275,930.082040138629,57,80,7,80,0

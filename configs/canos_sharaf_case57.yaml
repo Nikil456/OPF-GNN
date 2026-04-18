@@ -1,0 +1,23 @@
+# Train CANOS on Sharaf CSV exports (case57 sample folder under data_from_sharaf).
+model:
+  hidden_size: 128
+  num_message_passing_steps: 12
+  decoder_hidden: 256
+
+dataset:
+  type: sharaf_csv
+  root: data_from_sharaf
+  sbase_mva: 100.0
+  # Optional: restrict to specific subfolders (default: all dirs with buses.csv)
+  # sample_dirs:
+  #   - pglib_opf_case57_ieee_sample_000009
+  repeat: 1
+  shuffle: true
+
+train:
+  lr: 0.0002
+  steps: 500
+  log_every: 25
+  constraint_weight: 0.1
+  grad_clip: 1.0
+  out_dir: artifacts/sharaf_case57

@@ -22,8 +22,13 @@ TRAFO_BFR_IDX = 2
 TRAFO_BTO_IDX = 3
 TRAFO_R_IDX = 4
 TRAFO_X_IDX = 5
-TRAFO_TAP_IDX = 9
-TRAFO_SHIFT_IDX = 10
+#
+# Transformer edge feature columns from OPFDataset:
+#   indices 7 ~ tap (values around 0.93~0.98 in case14)
+#   index 8   ~ shift (often 0 in case14)
+#
+TRAFO_TAP_IDX = 7
+TRAFO_SHIFT_IDX = 8
 
 
 class MLP(nn.Module):

@@ -1,90 +1,83 @@
-# CANOS Reproduction (Paper Implementation)
+# OPF-GNN: CANOS + Sharaf CSV
 
-This repository contains a practical reproduction of the core CANOS method from:
+Reproduction-oriented **CANOS** ([arXiv:2403.17660](https://arxiv.org/abs/2403.17660)) training on **Sharaf-exported CSV** samples: one subfolder per scenario under [`data_from_sharaf/`](data_from_sharaf/README.md) (`buses.csv`, `branches.csv`, `generators.csv`, …).
 
-- *CANOS: A Fast and Scalable Neural AC-OPF Solver Robust To N-1 Perturbations* (arXiv:2403.17660)
+Concept note for the team: [`docs/CANOS_notes.md`](docs/CANOS_notes.md).
 
-It implements the key architectural and training ideas from the paper:
-
-- Encode-Process-Decode GNN for heterogeneous power-grid graphs
-- Typed message passing with many interaction steps and residual connections
-- Bounded outputs for voltage magnitude and generator dispatch via sigmoid mapping
-- Branch-flow derivation from predicted voltages using AC branch equations
-- Constraint-augmented training objective:
-  - supervised L2 + weighted constraint violations
-
-It can now also consume the real PyTorch Geometric OPF dataset via
-`torch_geometric.datasets.OPFDataset`.
-
-## What this reproduction includes
-
-- `src/canos/model.py`: CANOS architecture
-- `src/canos/losses.py`: supervised and constraint losses
-- `src/canos/data.py`: graph batch schema and synthetic dataset for smoke runs
-- `scripts/train.py`: training script
-- `configs/canos_small.yaml`: default config
-
-## Install
+## Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 ```
 
-If you are using the PyG OPF dataset path, `torch-geometric` is now included in
-the project dependencies.
+## How to test
 
-## Run
+From the repo root, with the venv activated and dependencies installed (see **Setup**).
 
-```bash
-python scripts/train.py --config configs/canos_small.yaml --device cpu
-```
+### 1. Unit-style smoke test (forward, loss, backward)
 
-A checkpoint is written to `artifacts/canos_repro.pt`.
-
-## Run With PyG OPFDataset
-
-Install PyTorch Geometric in the active environment, then run:
+**Requires** at least one sample folder under `data_from_sharaf/` with `buses.csv` (see [`data_from_sharaf/README.md`](data_from_sharaf/README.md)).
 
 ```bash
-python scripts/train.py --config configs/canos_pyg_opf.yaml --device cpu
+python3 scripts/verify_canos_outputs.py
 ```
 
-This uses `torch_geometric.datasets.OPFDataset` and maps the returned
-`HeteroData` into the internal `GraphBatch` format expected by CANOS.
+**Expected:** a single line ending with something like:
 
-The training path also applies a compatibility patch for Python 3.10/3.11,
-since current PyG OPFDataset releases may call tar extraction with a keyword
-that is only supported in newer Python versions.
+```text
+verify_canos_outputs: OK (forward, loss, backward)
+```
 
-Supported OPFDataset fields used by the adapter:
+If the directory is missing or empty, the script exits with an error telling you to add CSV samples.
 
-- Node types: `bus`, `generator`, `load`, `shunt`
-- Edge types: `("bus", "ac_line", "bus")`, `("bus", "transformer", "bus")`
-- Link edges: `("generator", "generator_link", "bus")`, `("load", "load_link", "bus")`, `("shunt", "shunt_link", "bus")`
-- Targets: node `y` for bus/generator and `edge_label` for ac lines/transformers
+### 2. Training loop smoke test (logged losses + checkpoint)
 
-## Mapping to paper components
+Runs a few optimizer steps and prints `total`, `sup` (supervised), and `cons` (constraints). Use a small step count so it finishes in seconds:
 
-1. **Encode**
-   - Independent linear projections per node/edge type into latent vectors.
-2. **Process**
-   - Multiple typed interaction steps over bus/gen/load/shunt/line/transformer entities.
-3. **Decode**
-   - Bus decoder predicts `va`, `vm`; generator decoder predicts `pg`, `qg`.
-4. **Bounds enforcement**
-   - `sigmoid(raw) * (upper - lower) + lower` on `vm`, `pg`, `qg`.
-5. **Derive branch flow**
-   - Uses branch electrical parameters and predicted voltages for `pf, qf, pt, qt`.
-6. **Training objective**
-   - `L = L_supervised + C * L_constraints`, with `C=0.1` default.
+```bash
+python3 scripts/train.py --config configs/canos_sharaf_case57.yaml --device cpu --steps 35
+```
 
-## Notes on fidelity
+**Expected:** lines like:
 
-- This is a clean reproduction-oriented implementation in PyTorch.
-- The paper's exact software stack used JAX/Haiku/Jraph; this code mirrors method logic rather than exact framework internals.
-- The synthetic dataset is for smoke-testing only. Replace it with real PGLIB-derived graph tensors and AC-OPF labels to replicate reported metrics.
-- For PyG OPFDataset, feature dimensions are inferred from the dataset sample at runtime, so the model matches the dataset schema automatically.
-- The train script runs exactly one dataset configuration at a time: one split, one case name, one perturbation setting. It does not iterate over all PGLIB cases automatically.
+```text
+step=00001 total=... sup=... cons=... time=...s
+step=00025 total=... sup=... cons=... time=...s
+saved checkpoint: artifacts/sharaf_case57/canos_repro.pt
+```
+
+Numeric values depend on data and hardware; the important part is **finite** losses and **no traceback**.
+
+### 3. Full training run
+
+Uses the step count from the YAML (`train.steps`, e.g. 500 in `canos_sharaf_case57.yaml`):
+
+```bash
+python3 scripts/train.py --config configs/canos_sharaf_case57.yaml --device cpu
+```
+
+Override steps for a longer or shorter run: `--steps N`.
+
+Checkpoint path: `artifacts/sharaf_case57/canos_repro.pt` unless you change `train.out_dir` in the config.
+
+## Implementation map
+
+| Piece | Location |
+|--------|----------|
+| Model (`CANOS`) | `src/canos/model.py` |
+| `GraphBatch` | `src/canos/data.py` |
+| Sharaf CSV → `GraphBatch` | `src/canos/sharaf_csv.py` |
+| Losses | `src/canos/losses.py` |
+| Training loop | `scripts/train.py` |
+| Config | `configs/canos_sharaf_case57.yaml` |
+
+## What matches the paper (high level)
+
+- Heterogeneous graph (bus, generator, load, shunt, ac_line, transformer)
+- Encode–process–decode GNN, bounded `vm` / `pg` / `qg`, branch flows from physics
+- `total = supervised + constraint_weight × constraints` (default **C = 0.1**)
+
+Stack here is **PyTorch** only (no PyG / OPFDataset in this trimmed repo).

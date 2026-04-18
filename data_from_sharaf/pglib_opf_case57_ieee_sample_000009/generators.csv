@@ -1,0 +1,8 @@
+case_id,generator_row_index,bus_id,Pg_mw,Pmin_mw,Pmax_mw,marginal_cost_c1
+pglib_opf_case57_ieee,0,1,245.0,0.0,245.0,16.960624
+pglib_opf_case57_ieee,1,2,0.0,0.0,0.0,0.0
+pglib_opf_case57_ieee,2,3,0.0,0.0,60.0,34.075557
+pglib_opf_case57_ieee,3,6,0.0,0.0,0.0,0.0
+pglib_opf_case57_ieee,4,8,685.0820401386275,0.0,1159.0,30.441037
+pglib_opf_case57_ieee,5,9,0.0,0.0,0.0,0.0
+pglib_opf_case57_ieee,6,12,0.0,0.0,519.0,37.188979

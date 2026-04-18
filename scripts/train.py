@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -10,12 +11,11 @@ import yaml
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-from canos.data import (
-    GraphBatch,
-    SyntheticPowerDataset,
-    graphbatch_from_pyg,
-    patch_torch_geometric_tar_extract_compat,
-)
+SRC_DIR = (Path(__file__).resolve().parent.parent / "src").as_posix()
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from canos.data import GraphBatch
 from canos.losses import compute_total_loss
 from canos.model import CANOS
 
@@ -52,40 +52,37 @@ def build_model(cfg: dict, sample: GraphBatch) -> CANOS:
     )
 
 
+def _build_paper_like_lr_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    base_lr: float,
+    warmup_steps: int,
+    decay_rate: float,
+    transition_steps: int,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    def lr_lambda(step: int) -> float:
+        if step <= 0:
+            return 0.0
+        if step < warmup_steps:
+            return step / float(warmup_steps)
+        k = (step - warmup_steps) // int(transition_steps)
+        return float(decay_rate**k)
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 def _build_dataset_and_loader(cfg: dict) -> tuple[Any, Any, GraphBatch]:
     dcfg = cfg["dataset"]
-    dataset_type = dcfg.get("type", "synthetic")
+    if dcfg.get("type", "sharaf_csv") != "sharaf_csv":
+        raise ValueError("Only dataset.type: sharaf_csv is supported in this repo.")
 
-    if dataset_type == "pyg_opf":
-        patch_torch_geometric_tar_extract_compat()
-        from torch_geometric.datasets import OPFDataset
-        from torch_geometric.loader import DataLoader as PyGDataLoader
+    from canos.sharaf_csv import SharafCSVDataset
 
-        dataset = OPFDataset(
-            root=dcfg["root"],
-            split=dcfg.get("split", "train"),
-            case_name=dcfg.get("case_name", "pglib_opf_case500_goc"),
-            num_groups=dcfg.get("num_groups", 1),
-            topological_perturbations=dcfg.get("topological_perturbations", False),
-            force_reload=dcfg.get("force_reload", False),
-        )
-        loader = PyGDataLoader(
-            dataset,
-            batch_size=dcfg.get("batch_size", 1),
-            shuffle=dcfg.get("shuffle", True),
-        )
-        sample = graphbatch_from_pyg(dataset[0])
-        return dataset, loader, sample
-
-    dataset = SyntheticPowerDataset(
-        size=dcfg["size"],
-        n_bus=dcfg["n_bus"],
-        n_gen=dcfg["n_gen"],
-        n_load=dcfg["n_load"],
-        n_shunt=dcfg["n_shunt"],
-        n_line=dcfg["n_line"],
-        n_trafo=dcfg["n_trafo"],
-        seed=dcfg.get("seed", 0),
+    dataset = SharafCSVDataset(
+        root=dcfg["root"],
+        sbase_mva=float(dcfg.get("sbase_mva", 100.0)),
+        repeat=int(dcfg.get("repeat", 1)),
+        sample_dirs=dcfg.get("sample_dirs"),
     )
     loader = DataLoader(
         dataset,
@@ -97,32 +94,33 @@ def _build_dataset_and_loader(cfg: dict) -> tuple[Any, Any, GraphBatch]:
     return dataset, loader, sample
 
 
-def _to_graph_batch(batch: Any, device: torch.device) -> GraphBatch:
-    if isinstance(batch, GraphBatch):
-        return batch.to(device)
-    if hasattr(batch, "node_types") and hasattr(batch, "edge_types"):
-        return graphbatch_from_pyg(batch.to(device))
-    raise TypeError(f"Unsupported batch type: {type(batch)!r}")
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train CANOS reproduction")
-    parser.add_argument("--config", type=str, default="configs/canos_small.yaml")
+    parser = argparse.ArgumentParser(description="Train CANOS on Sharaf CSV exports")
+    parser.add_argument("--config", type=str, default="configs/canos_sharaf_case57.yaml")
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--steps", type=int, default=None, help="Override cfg['train']['steps'] for quick smoke tests")
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
     device = torch.device(args.device)
 
-    dataset, loader, sample = _build_dataset_and_loader(cfg)
-    del dataset
+    _, loader, sample = _build_dataset_and_loader(cfg)
 
     model = build_model(cfg, sample).to(device)
     tcfg = cfg["train"]
     optimizer = Adam(model.parameters(), lr=tcfg["lr"])
+    scheduler = None
+    if tcfg.get("lr_warmup_steps") is not None:
+        scheduler = _build_paper_like_lr_scheduler(
+            optimizer,
+            base_lr=tcfg["lr"],
+            warmup_steps=int(tcfg["lr_warmup_steps"]),
+            decay_rate=float(tcfg.get("lr_decay_rate", 0.9)),
+            transition_steps=int(tcfg.get("lr_decay_transition_steps", 4000)),
+        )
 
     model.train()
-    steps = tcfg["steps"]
+    steps = args.steps if args.steps is not None else tcfg["steps"]
     constraint_weight = tcfg.get("constraint_weight", 0.1)
 
     start = time.time()
@@ -134,7 +132,7 @@ def main() -> None:
             it = iter(loader)
             batch = next(it)
 
-        batch = _to_graph_batch(batch, device)
+        batch = batch.to(device)
 
         optimizer.zero_grad(set_to_none=True)
         pred = model(batch)
@@ -142,6 +140,8 @@ def main() -> None:
         losses["total"].backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), tcfg.get("grad_clip", 1.0))
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
 
         if step % tcfg.get("log_every", 20) == 0 or step == 1:
             elapsed = time.time() - start
